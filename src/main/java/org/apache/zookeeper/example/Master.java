@@ -1,7 +1,6 @@
 package org.apache.zookeeper.example;
 
 import org.apache.zookeeper.*;
-import org.apache.zookeeper.data.Stat;
 
 import java.util.Random;
 
@@ -14,41 +13,43 @@ public class Master implements Watcher {
     private String serverId = Integer.toHexString(new Random().nextInt());
     private ZooKeeper zooKeeper;
 
+    private AsyncCallback.DataCallback masterCheckCallBack = (code, path, context, data, stat) -> {
+        switch (KeeperException.Code.get(code)) {
+            case NONODE:
+                runForMaster();
+                return;
+            case CONNECTIONLOSS:
+                checkMaster();
+                return;
+        }
+    };
+
+    private AsyncCallback.StringCallback masterCreateCallBack = (code, path, context, name) -> {
+        switch (KeeperException.Code.get(code)) {
+            case OK:
+                isLeader = true;
+                break;
+            case CONNECTIONLOSS:
+                checkMaster();
+                return;
+            default:
+                isLeader = false;
+        }
+
+        System.out.println("I'm " + (isLeader ? "" : "not ") + "the leader");
+    };
+
     public Master(String host) {
         this.host = host;
     }
 
-    private boolean checkMaster() throws InterruptedException {
-        while (true) {
-            try {
-                byte masterId[] = zooKeeper.getData("/master", false, new Stat());
-                isLeader = new String(masterId).equals(serverId);
-                return true;
-            } catch (KeeperException.NoNodeException e) {
-                return false;
-            } catch (KeeperException.ConnectionLossException e) {
-            } catch (KeeperException e) {
-                e.printStackTrace();
-            }
-        }
+    private void checkMaster(){
+        zooKeeper.getData("/master", false, masterCheckCallBack, null);
     }
 
-    private void runForMaster() throws InterruptedException {
-        while (true) {
-            try {
-                zooKeeper.create("/master", serverId.getBytes(), OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL);
-                isLeader = true;
-                break;
-            } catch (KeeperException.NodeExistsException e) {
-                isLeader = false;
-                break;
-            } catch (KeeperException.ConnectionLossException e) {
-            } catch (KeeperException e) {
-                e.printStackTrace();
-            }
-
-            if (checkMaster()) break;
-        }
+    private void runForMaster() {
+            zooKeeper.create("/master", serverId.getBytes(), OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL,
+                    masterCreateCallBack, null);
     }
 
     private void startZooKeeper() throws Exception {
@@ -67,7 +68,7 @@ public class Master implements Watcher {
         Master master = new Master(args[0]);
         master.startZooKeeper();
         master.runForMaster();
-        if (isLeader) {
+        if (master.isLeader) {
             System.out.println("I'm the leader");
             Thread.sleep(60000);
         } else {
